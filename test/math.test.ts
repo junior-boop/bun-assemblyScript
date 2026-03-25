@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { add, multiply, subtract } from "./fixtures/math.as";
+import { add, multiply, subtract, texte } from "./fixtures/math.as";
 
 describe("AssemblyScript Math Functions", () => {
   it("should add two numbers correctly", () => {
@@ -18,5 +18,11 @@ describe("AssemblyScript Math Functions", () => {
     expect(subtract(5, 3)).toBe(2);
     expect(subtract(3, 5)).toBe(-2);
     expect(subtract(0, 0)).toBe(0);
+  });
+
+  it("should handle string passthrough correctly", () => {
+    expect(texte("hello")).toBe("hello");
+    expect(texte("")).toBe("");
+    expect(texte("bun + assemblyscript")).toBe("bun + assemblyscript");
   });
 });

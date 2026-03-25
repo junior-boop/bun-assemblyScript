@@ -4,7 +4,7 @@
 [![Bun](https://img.shields.io/badge/Bun-%23000000.svg?logo=bun&logoColor=white)](https://bun.sh)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Importez des fichiers AssemblyScript (`.as`) directement dans vos projets Bun — comme des modules classiques.
+Plugin Bun pour importer des fichiers [AssemblyScript](https://www.assemblyscript.org/) (`.as`) directement dans vos projets — comme des modules TypeScript classiques.
 
 ```typescript
 import { add } from "./math.as";
@@ -20,11 +20,15 @@ console.log(add(2, 3)); // 5
 bun add -d bun-assemblyscript assemblyscript
 ```
 
+Cela installe :
+- `bun-assemblyscript` — le plugin Bun
+- `assemblyscript` — le compilateur AssemblyScript (peer dependency)
+
 ---
 
-## Démarrage rapide
+## Démarrage rapide (4 étapes)
 
-### Étape 1 — Créer le preload
+### 1. Créer le fichier preload
 
 ```typescript
 // preload.ts
@@ -34,7 +38,9 @@ import { assemblyScriptPlugin } from "bun-assemblyscript";
 plugin(assemblyScriptPlugin());
 ```
 
-### Étape 2 — Configurer bunfig.toml
+### 2. Configurer bunfig.toml
+
+Créez (ou modifiez) `bunfig.toml` à la racine du projet :
 
 ```toml
 [run]
@@ -44,7 +50,9 @@ preload = ["./preload.ts"]
 preload = ["./preload.ts"]
 ```
 
-### Étape 3 — Écrire du code AssemblyScript
+Cela charge le plugin automatiquement avant chaque `bun run` et `bun test`.
+
+### 3. Écrire du code AssemblyScript
 
 ```typescript
 // math.as
@@ -55,16 +63,21 @@ export function add(a: i32, b: i32): i32 {
 export function multiply(a: i32, b: i32): i32 {
   return (a * b) as i32;
 }
+
+export function subtract(a: i32, b: i32): i32 {
+  return (a - b) as i32;
+}
 ```
 
-### Étape 4 — Importer normalement
+### 4. Importer et utiliser
 
 ```typescript
 // index.ts
-import { add, multiply } from "./math.as";
+import { add, multiply, subtract } from "./math.as";
 
 console.log(add(2, 3));      // 5
 console.log(multiply(4, 5)); // 20
+console.log(subtract(10, 3)); // 7
 ```
 
 ```bash
@@ -73,9 +86,55 @@ bun run index.ts
 
 ---
 
+## Types supportés
+
+### Types numériques (passage direct)
+
+Les types numériques sont passés directement entre JavaScript et WebAssembly sans conversion :
+
+```typescript
+// math.as
+export function add(a: i32, b: i32): i32 { return (a + b) as i32; }
+export function compute(x: f64): f64 { return x * 2.0; }
+```
+
+```typescript
+// index.ts
+import { add, compute } from "./math.as";
+
+add(2, 3);       // 5 (i32)
+compute(3.14);   // 6.28 (f64)
+```
+
+Types numériques supportés : `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `isize`, `usize`, `bool`
+
+### Types string (wrapper automatique)
+
+Les fonctions qui utilisent `string` en paramètre ou en retour sont automatiquement wrappées par le plugin :
+
+```typescript
+// greeting.as
+export function greet(name: string): string {
+  return "Hello, " + name + "!";
+}
+```
+
+```typescript
+// index.ts
+import { greet } from "./greeting.as";
+
+greet("World"); // "Hello, World!"
+```
+
+Le plugin génère automatiquement les fonctions `__readStr` (lecture depuis WASM) et `__writeStr` (écriture vers WASM).
+
+> **Note :** Le support des strings nécessite que le module WASM exporte `__new`. Le plugin ajoute automatiquement le flag `--exportRuntime` au compilateur pour cela.
+
+---
+
 ## Modes d'utilisation
 
-### Preload (recommandé)
+### Mode 1 — Preload (recommandé)
 
 Le plugin se charge automatiquement au démarrage de Bun grâce à `bunfig.toml`.
 
@@ -84,12 +143,11 @@ Le plugin se charge automatiquement au démarrage de Bun grâce à `bunfig.toml`
 preload = ["./preload.ts"]
 ```
 
-Tous vos fichiers `.as` sont alors importables partout.
+Tous vos fichiers `.as` sont alors importables partout dans votre projet.
 
-### Programmatique avec `bun build`
+### Mode 2 — Programmatique avec Bun.build()
 
 ```typescript
-import { Bun } from "bun";
 import { assemblyScriptPlugin } from "bun-assemblyscript";
 
 await Bun.build({
@@ -99,9 +157,13 @@ await Bun.build({
 });
 ```
 
-Le plugin détecte automatiquement le mode build et applique les optimisations maximales (`optimizeLevel: 3`, `runtime: "minimal"`, pas de debug).
+Le plugin détecte automatiquement le mode build :
+- **Dev** (`bun run`) : `optimizeLevel: 0`, `debug: true`, `sourceMap: true`
+- **Build** (`bun build`) : `optimizeLevel: 3`, `debug: false`, `shrinkLevel: 2`
 
-### API directe du compilateur
+### Mode 3 — API directe du compilateur
+
+Pour un contrôle total sans le plugin :
 
 ```typescript
 import { compile, instantiate } from "bun-assemblyscript";
@@ -109,6 +171,7 @@ import { compile, instantiate } from "bun-assemblyscript";
 const result = await compile("./math.as", {
   optimizeLevel: 3,
   runtime: "stub",
+  debug: false,
 });
 
 if (result.success && result.wasmBytes) {
@@ -127,32 +190,54 @@ import { assemblyScriptPlugin } from "bun-assemblyscript";
 plugin(
   assemblyScriptPlugin({
     compilerOverrides: {
-      optimizeLevel: 2,
+      optimizeLevel: 3,
       runtime: "stub",
-      sourceMap: true,
+      shrinkLevel: 1,
+      sourceMap: false,
       debug: false,
     },
+    compileTimeout: 30000,  // timeout en ms
+    embedMode: "auto",      // "inline" | "file" | "auto"
   })
 );
 ```
 
+### Options du plugin
+
+| Option | Type | Défaut | Description |
+|--------|------|--------|-------------|
+| `compilerOverrides` | `Partial<CompilerOptions>` | `{}` | Surcharger les options du compilateur |
+| `compileTimeout` | `number` | `30000` | Timeout de compilation en ms |
+| `embedMode` | `"inline" \| "file" \| "auto"` | `"auto"` | Comment embarquer le WASM |
+
+### Options du compilateur
+
 | Option | Type | Dev | Build | Description |
 |--------|------|-----|-------|-------------|
 | `optimizeLevel` | `0 \| 1 \| 2 \| 3` | `0` | `3` | Niveau d'optimisation |
-| `runtime` | `string` | `"stub"` | `"minimal"` | Runtime AssemblyScript |
-| `sourceMap` | `boolean` | `false` | `false` | Générer les source maps |
-| `debug` | `boolean` | `true` | `false` | Mode debug |
 | `shrinkLevel` | `0 \| 1 \| 2` | `0` | `2` | Niveau de réduction de taille |
+| `runtime` | `string` | `"stub"` | `"stub"` | Runtime AssemblyScript |
+| `sourceMap` | `boolean` | `true` | `false` | Générer les source maps |
+| `debug` | `boolean` | `true` | `false` | Mode debug |
+
+### Modes d'embedding
+
+| Mode | Description |
+|------|-------------|
+| `"inline"` | Le WASM est encodé en base64 dans le module JS (défaut si < 100 Ko) |
+| `"file"` | Le WASM est écrit dans un fichier séparé dans `outdir` |
+| `"auto"` | Choisit automatiquement selon la taille |
 
 ---
 
-## API
+## API Reference
 
 ### `assemblyScriptPlugin(options?): BunPlugin`
 
-Crée le plugin Bun.
+Crée le plugin Bun pour AssemblyScript.
 
 ```typescript
+import { plugin } from "bun";
 import { assemblyScriptPlugin } from "bun-assemblyscript";
 
 plugin(assemblyScriptPlugin());
@@ -163,24 +248,29 @@ plugin(assemblyScriptPlugin());
 Compile un fichier `.as` en bytes WASM.
 
 ```typescript
-const result = await compile("./math.as", { optimizeLevel: 3 });
+import { compile } from "bun-assemblyscript";
 
-// result.success       : boolean
-// result.wasmBytes     : Uint8Array | null
-// result.sourceMapBytes: Uint8Array | null
-// result.errors        : string[]
+const result = await compile("./math.as", {
+  optimizeLevel: 3,
+  runtime: "stub",
+});
+
+// result.success        : boolean
+// result.wasmBytes      : Uint8Array | null
+// result.sourceMapBytes : Uint8Array | null
+// result.errors         : string[]
 ```
 
 ### `instantiate(wasmBytes): Promise<ASExports>`
 
-Instancie un module WASM avec les imports AssemblyScript requis (`env.memory`, `env.abort`).
+Instancie un module WASM et retourne un objet plat avec les fonctions exportées.
 
 ```typescript
+import { instantiate } from "bun-assemblyscript";
+
 const exports = await instantiate(wasmBytes);
 exports.add(2, 3); // 5
 ```
-
-Retourne un objet plat — chaque fonction exportée nommément, pas `instance.exports` brut.
 
 ### `AbortError`
 
@@ -203,31 +293,39 @@ try {
 
 ---
 
-## Pipeline interne
+## Fonctionnement interne
 
 ```
-fichier .as
-    │
-    ▼
-┌──────────┐  .as → .ts bridge  ┌─────┐
-│ compiler │ ──────────────────▶ │ asc │
-└──────────┘                     └──┬──┘
-                                    │
-                               bytes WASM
-                                    │
-    ┌───────────────────────────────┘
-    ▼
-┌──────────────┐  découvrir exports  ┌────────┐
-│ instantiator │ ◀────────────────── │ plugin │
-└──────┬───────┘                     └───┬────┘
-       │                                 │
-  ASExports                         module JS inline
-  (objet plat)                    ┌─────────────────┐
-                                  │ const wasm = …  │
-                                  │ const inst = …  │
-                                  │ export const …  │
-                                  └─────────────────┘
+  fichier .as
+       │
+       ▼
+  ┌──────────┐    .as → .ts bridge    ┌─────┐
+  │ compiler │ ──────────────────────▶ │ asc │
+  └──────────┘  (asc v0.28 exige .ts) └──┬──┘
+                                         │
+                                    bytes WASM
+                                         │
+       ┌─────────────────────────────────┘
+       ▼
+  ┌──────────────┐   découvrir exports   ┌────────┐
+  │ instantiator │ ◀──────────────────── │ plugin │
+  └──────┬───────┘                       └───┬────┘
+         │                                   │
+    ASExports                            module JS inline
+    (objet plat)                        ┌───────────────────┐
+                                        │ const __bin = …   │
+                                        │ const __inst = …  │
+                                        │ export const add… │
+                                        └───────────────────┘
 ```
+
+### Étapes de compilation
+
+1. **Pont .as → .ts** : asc v0.28 ne supporte que l'extension `.as`. Le plugin copie le fichier `.as` dans un fichier `.ts` temporaire.
+2. **Compilation asc** : Le compilateur AssemblyScript est invoqué via `node asc.js` (Node est requis car asc utilise `WebAssembly.instantiateStreaming` non supporté par Bun).
+3. **Découverte des exports** : Le module WASM est instancié pour découvrir les noms des fonctions exportées.
+4. **Génération du module JS** : Un module JavaScript inline est généré avec le WASM embarqué en base64 et les wrappers pour les types string.
+5. **Génération des types** : Un fichier `.d.ts` est généré à côté du `.as` pour l'autocomplétion dans l'éditeur.
 
 ---
 
@@ -237,15 +335,21 @@ fichier .as
 bun test
 ```
 
-La configuration `bunfig.toml` charge le preload automatiquement pour les tests.
+La configuration `bunfig.toml` charge le preload automatiquement :
+
+```toml
+[test]
+preload = ["./preload.ts"]
+```
 
 ---
 
 ## Limitations
 
-- Imports AssemblyScript (`import ... from "..."`) dans les fichiers `.as` non supportés
-- Seuls les types numériques (`i32`, `f64`, etc.) sont directement exportés
-- `sourceMap` nécessite un runtime compatible
+- Les imports AssemblyScript (`import ... from "..."`) dans les fichiers `.as` ne sont pas supportés
+- Seuls les types `string` et les types numériques sont supportés en paramètre/retour
+- Les classes exportées sont parsées mais leur utilisation en runtime n'est pas encore implémentée
+- Le compilateur nécessite Node.js installé (pour l'exécution de `asc.js`)
 
 ---
 

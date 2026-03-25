@@ -1,4 +1,20 @@
 // @bun
+var __create = Object.create;
+var __getProtoOf = Object.getPrototypeOf;
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __toESM = (mod, isNodeMode, target) => {
+  target = mod != null ? __create(__getProtoOf(mod)) : {};
+  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  for (let key of __getOwnPropNames(mod))
+    if (!__hasOwnProp.call(to, key))
+      __defProp(to, key, {
+        get: () => mod[key],
+        enumerable: true
+      });
+  return to;
+};
 var __require = import.meta.require;
 
 // src/compiler.ts
@@ -13,7 +29,8 @@ function resolveAscJs(cwd) {
     try {
       if (Bun.file(candidate).size > 0)
         return candidate;
-    } catch {}
+    } catch {
+    }
   }
   throw new Error([
     "AssemblyScript compiler (asc) introuvable.",
@@ -111,7 +128,8 @@ async function compile(filename, options = {}) {
       if (tmpFile) {
         try {
           await fs.unlink(tmpFile);
-        } catch {}
+        } catch {
+        }
       }
     }
   }
@@ -140,7 +158,14 @@ function readASString(memory, ptr) {
   if (length <= 0 || ptr + byteLength > buf.byteLength)
     return "";
   const u16 = new Uint16Array(buf, ptr, length);
-  return String.fromCharCode(...u16);
+  const CHUNK = 8192;
+  let result = "";
+  for (let i = 0;i < length; i += CHUNK) {
+    const end = Math.min(i + CHUNK, length);
+    const slice = u16.subarray(i, end);
+    result += String.fromCharCode.apply(null, slice);
+  }
+  return result;
 }
 async function instantiate(wasmBytes) {
   const memory = new WebAssembly.Memory({ initial: 1 });
@@ -166,80 +191,218 @@ async function instantiate(wasmBytes) {
 }
 
 // src/typegen/parser.ts
-function extractClassBody(text, startIndex) {
-  let depth = 0;
-  let inClass = false;
-  let bodyStart = -1;
-  const length = text.length;
-  for (let i = startIndex;i < length; i++) {
-    const char = text[i];
-    if (char === "{") {
-      if (depth === 0) {
-        inClass = true;
-        bodyStart = i + 1;
+function stripComments(source) {
+  const chars = [...source];
+  let i = 0;
+  while (i < chars.length) {
+    if (chars[i] === '"' || chars[i] === "'" || chars[i] === "`") {
+      const quote = chars[i];
+      i++;
+      while (i < chars.length && chars[i] !== quote) {
+        if (chars[i] === "\\")
+          i++;
+        i++;
       }
+      i++;
+      continue;
+    }
+    if (chars[i] === "/" && chars[i + 1] === "*") {
+      const start = i;
+      i += 2;
+      while (i < chars.length - 1 && !(chars[i] === "*" && chars[i + 1] === "/")) {
+        chars[i] = " ";
+        i++;
+      }
+      chars[i] = " ";
+      chars[i + 1] = " ";
+      i += 2;
+      continue;
+    }
+    if (chars[i] === "/" && chars[i + 1] === "/") {
+      while (i < chars.length && chars[i] !== `
+`) {
+        chars[i] = " ";
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return chars.join("");
+}
+function parseParams(paramsStr, warnings) {
+  if (!paramsStr.trim())
+    return [];
+  const parts = [];
+  let depth = 0;
+  let cursor = 0;
+  for (let i = 0;i < paramsStr.length; i++) {
+    if (paramsStr[i] === '"' || paramsStr[i] === "'") {
+      const quote = paramsStr[i];
+      i++;
+      while (i < paramsStr.length && paramsStr[i] !== quote) {
+        if (paramsStr[i] === "\\")
+          i++;
+        i++;
+      }
+      continue;
+    }
+    if (paramsStr[i] === "<")
       depth++;
-    } else if (char === "}") {
+    else if (paramsStr[i] === ">")
       depth--;
-      if (depth === 0 && inClass) {
-        return text.substring(bodyStart, i);
+    else if (paramsStr[i] === "," && depth === 0) {
+      parts.push(paramsStr.slice(cursor, i));
+      cursor = i + 1;
+    }
+  }
+  parts.push(paramsStr.slice(cursor));
+  return parts.map((raw) => raw.trim()).filter(Boolean).map((raw) => {
+    const optMatch = /^([a-zA-Z0-9_]+)(\?)?\s*:\s*([\s\S]+?)(?:\s*=\s*([\s\S]+))?$/.exec(raw);
+    if (!optMatch) {
+      warnings.push({ kind: "ambiguous_param", message: `Unparseable param: "${raw}"` });
+      return { name: raw, type: "unknown" };
+    }
+    return {
+      name: optMatch[1],
+      optional: optMatch[2] === "?" || undefined,
+      type: optMatch[3].trim(),
+      defaultValue: optMatch[4]?.trim()
+    };
+  });
+}
+function parseGenerics(declaration) {
+  const m = /<([^>]+)>/.exec(declaration);
+  if (!m)
+    return [];
+  return m[1].split(",").map((s) => s.trim()).filter(Boolean);
+}
+function extractBlock(text, startIndex, warnings) {
+  let depth = 0;
+  let bodyStart = -1;
+  for (let i = startIndex;i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      i++;
+      while (i < text.length && text[i] !== quote) {
+        if (text[i] === "\\")
+          i++;
+        i++;
+      }
+      continue;
+    }
+    if (ch === "{") {
+      if (depth === 0)
+        bodyStart = i + 1;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && bodyStart !== -1) {
+        return { body: text.slice(bodyStart, i), end: i };
       }
     }
   }
-  return "";
+  warnings.push({
+    kind: "unterminated_block",
+    message: `Unterminated block starting at offset ${startIndex}`,
+    offset: startIndex
+  });
+  return { body: "", end: text.length };
+}
+function parseClassFields(body, warnings) {
+  const fields = [];
+  const fieldRegex = /(?:(public|protected|private)\s+)?(?:(static)\s+)?(?:(readonly)\s+)?([a-zA-Z0-9_]+)\s*:\s*([^;=\n]+)/g;
+  let m;
+  while ((m = fieldRegex.exec(body)) !== null) {
+    const after = body.slice(m.index + m[0].length).trimStart();
+    if (after.startsWith("("))
+      continue;
+    fields.push({
+      visibility: m[1] ?? "public",
+      isStatic: m[2] === "static",
+      isReadonly: m[3] === "readonly",
+      name: m[4],
+      type: m[5].trim()
+    });
+  }
+  return fields;
+}
+function parseClassMethods(body, warnings) {
+  const methods = [];
+  const methodRegex = /(?:(public|protected|private)\s+)?(?:(static)\s+)?(?:(abstract)\s+)?([a-zA-Z0-9_]+)\s*(<[^>]*>)?\s*\(([^)]*)\)\s*:\s*([^;{]+)/g;
+  let m;
+  while ((m = methodRegex.exec(body)) !== null) {
+    const name = m[4];
+    if (name === "constructor")
+      continue;
+    const visibility = m[1] ?? "public";
+    const generics = m[5] ? parseGenerics(m[5]) : [];
+    const params = parseParams(m[6], warnings);
+    const returnType = m[7].trim();
+    methods.push({
+      kind: "function",
+      visibility,
+      isStatic: m[2] === "static",
+      isAbstract: m[3] === "abstract",
+      name,
+      params,
+      returnType,
+      generics: generics.length > 0 ? generics : undefined
+    });
+  }
+  return methods;
 }
 function parseASExports(source) {
-  const text = source.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "");
+  const text = stripComments(source);
   const exports = [];
-  const fnRegex = /export\s+function\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*:\s*([^;{]+)/g;
+  const warnings = [];
+  const classRanges = [];
+  const classPrescan = /export\s+class\s+[a-zA-Z0-9_]+/g;
+  let prescanMatch;
+  while ((prescanMatch = classPrescan.exec(text)) !== null) {
+    const { end } = extractBlock(text, prescanMatch.index, warnings);
+    classRanges.push([prescanMatch.index, end]);
+  }
+  const isInsideClass = (offset) => classRanges.some(([start, end]) => offset > start && offset < end);
+  const fnRegex = /export\s+function\s+([a-zA-Z0-9_]+)\s*(<[^>]*>)?\s*\(([^)]*)\)\s*:\s*([^;{]+)/g;
   let match;
   while ((match = fnRegex.exec(text)) !== null) {
-    const name = match[1];
-    const paramsStr = match[2];
-    const returnType = match[3].trim();
-    const params = paramsStr.split(",").filter((p) => p.trim()).map((p) => {
-      const parts = p.split(":");
-      return {
-        name: parts[0].trim(),
-        type: parts.length > 1 ? parts[1].trim() : "unknown"
-      };
+    if (isInsideClass(match.index))
+      continue;
+    const generics = match[2] ? parseGenerics(match[2]) : [];
+    const params = parseParams(match[3], warnings);
+    const returnType = match[4].trim();
+    exports.push({
+      kind: "function",
+      name: match[1],
+      params,
+      returnType,
+      generics: generics.length > 0 ? generics : undefined
     });
-    exports.push({ kind: "function", name, params, returnType });
   }
-  const constRegex = /export\s+const\s+([a-zA-Z0-9_]+)\s*:\s*([^=;]+)/g;
+  const constRegex = /export\s+const\s+([a-zA-Z0-9_]+)\s*:\s*([^=;\n]+)/g;
   while ((match = constRegex.exec(text)) !== null) {
+    if (isInsideClass(match.index))
+      continue;
     exports.push({ kind: "const", name: match[1], type: match[2].trim() });
   }
-  const classRegex = /export\s+class\s+([a-zA-Z0-9_]+)/g;
+  const classRegex = /export\s+class\s+([a-zA-Z0-9_]+)\s*(<[^>]*>)?/g;
   while ((match = classRegex.exec(text)) !== null) {
     const className = match[1];
-    const body = extractClassBody(text, match.index);
-    const methods = [];
-    const methodRegex = /(?:public\s+)?([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*:\s*([^;{]+)/g;
-    let mMatch;
-    while ((mMatch = methodRegex.exec(body)) !== null) {
-      const mName = mMatch[1];
-      if (mName === "constructor")
-        continue;
-      const mParamsStr = mMatch[2];
-      const mReturnType = mMatch[3].trim();
-      const mParams = mParamsStr.split(",").filter((p) => p.trim()).map((p) => {
-        const parts = p.split(":");
-        return {
-          name: parts[0].trim(),
-          type: parts.length > 1 ? parts[1].trim() : "unknown"
-        };
-      });
-      methods.push({
-        kind: "function",
-        name: mName,
-        params: mParams,
-        returnType: mReturnType
-      });
-    }
-    exports.push({ kind: "class", name: className, methods });
+    const generics = match[2] ? parseGenerics(match[2]) : [];
+    const { body } = extractBlock(text, match.index, warnings);
+    const methods = parseClassMethods(body, warnings);
+    const fields = parseClassFields(body, warnings);
+    exports.push({
+      kind: "class",
+      name: className,
+      generics: generics.length > 0 ? generics : undefined,
+      methods,
+      fields
+    });
   }
-  return exports;
+  return { exports, warnings };
 }
 
 // src/typegen/typemap.ts
@@ -313,19 +476,20 @@ async function generateDts(exports, sourcePath) {
     if (newHash === oldHash) {
       return;
     }
-  } catch (err) {}
+  } catch (err) {
+  }
   await Bun.write(dtsPath, dtsContent);
 }
 
 // src/plugin.ts
-import { join } from "path";
+import { join, basename as basename2 } from "path";
 import { existsSync } from "fs";
-function isBuildMode(build) {
-  return build.config !== undefined && typeof build.config.target === "string" && build.config.target.length > 0 && false;
-}
+import { mkdir } from "fs/promises";
+import { createHash } from "crypto";
+var COMPLEX_TYPE_PATTERNS = ["string", "String", "Array", "Map", "Set", "Uint8Array", "Int32Array"];
 function isComplexType(t) {
   const trim = t.trim();
-  return trim === "string" || trim === "String" || trim.includes("Array") || trim.includes("Map");
+  return COMPLEX_TYPE_PATTERNS.some((p) => trim === p || trim.startsWith(p + "<"));
 }
 function hasComplexExports(exports) {
   for (const exp of exports) {
@@ -333,83 +497,166 @@ function hasComplexExports(exports) {
       return true;
     if (exp.type && isComplexType(exp.type))
       return true;
-    if (exp.params && exp.params.some((p) => isComplexType(p.type)))
-      return true;
     if (exp.returnType && isComplexType(exp.returnType))
       return true;
-    if (exp.methods && hasComplexExports(exp.methods))
+    if (exp.params?.some((p) => isComplexType(p.type)))
+      return true;
+    const methods = exp.methods;
+    if (methods?.length && hasComplexExports(methods.map((m) => ({ ...m, kind: "function" }))))
       return true;
   }
   return false;
 }
-function generateModule(exportNames, parsedExports, wasmSource, isInline) {
-  const lines = [
-    `// Auto-generated by bun-plugin-assemblyscript`
+async function readEmbedMode(cwd) {
+  const tomlPath = join(cwd, "bunfig.toml");
+  if (!existsSync(tomlPath))
+    return "auto";
+  try {
+    const config = await Bun.file(tomlPath).text();
+    const match = /embedMode\s*=\s*["']?(inline|file|auto)["']?/.exec(config);
+    return match?.[1] ?? "auto";
+  } catch {
+    return "auto";
+  }
+}
+async function compileWithTimeout(path, options, timeoutMs) {
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error(`Compilation timeout after ${timeoutMs}ms`)), timeoutMs));
+  return Promise.race([compile(path, options), timeout]);
+}
+function buildRuntimeHelpers(hasStringExports) {
+  const helpers = [
+    `const __memory = new WebAssembly.Memory({ initial: 1 });`,
+    ``,
+    `function __readStr(ptr) {`,
+    `  if (!ptr) return "";`,
+    `  const dv  = new DataView(__memory.buffer);`,
+    `  const len = dv.getInt32(ptr - 4, true) >>> 1;`,
+    `  if (len <= 0) return "";`,
+    `  const u16 = new Uint16Array(__memory.buffer, ptr, len);`,
+    `  const CHUNK = 8192;`,
+    `  let s = "";`,
+    `  for (let i = 0; i < len; i += CHUNK) {`,
+    `    const end = i + CHUNK < len ? i + CHUNK : len;`,
+    `    s += String.fromCharCode.apply(null, u16.subarray(i, end));`,
+    `  }`,
+    `  return s;`,
+    `}`
   ];
+  if (hasStringExports) {
+    helpers.push(``, `function __writeStr(str) {`, `  if (str == null) return 0;`, `  if (typeof __inst.exports.__new !== "function") {`, `    throw new Error("AssemblyScript runtime does not export __new \u2014 use runtime: 'full' or 'incremental' for string support");`, `  }`, `  const len = str.length;`, `  const ptr = __inst.exports.__new(len << 1, 1);`, `  new Uint16Array(__memory.buffer, ptr, len)`, `    .set(Array.from({ length: len }, (_, i) => str.charCodeAt(i)));`, `  return ptr;`, `}`);
+  }
+  return helpers;
+}
+function buildWasmLoader(wasmSource, isInline) {
   if (isInline) {
-    lines.push(`const __b64 = ${JSON.stringify(wasmSource)};`);
-    lines.push(`const __bin = Uint8Array.from(atob(__b64), (c) => c.charCodeAt(0));`);
-  } else {
-    lines.push(`const __url = ${JSON.stringify(wasmSource)};`);
-    lines.push(`const __res = await fetch(__url);`);
-    lines.push(`const __bin = new Uint8Array(await __res.arrayBuffer());`);
+    return [
+      `const __b64  = ${JSON.stringify(wasmSource)};`,
+      `const __bin  = Uint8Array.from(atob(__b64), (c) => c.charCodeAt(0));`
+    ];
   }
-  lines.push(`const __memory = new WebAssembly.Memory({ initial: 1 });`, `function __readStr(ptr) {`, `  if (!ptr) return "";`, `  const dv = new DataView(__memory.buffer);`, `  const len = dv.getInt32(ptr - 4, true) >>> 1;`, `  if (len <= 0) return "";`, `  return String.fromCharCode(...new Uint16Array(__memory.buffer, ptr, len));`, `}`, `function __writeStr(str) {`, `  if (str == null) return 0;`, `  const len = str.length;`, `  const ptr = __inst.exports.__new(len << 1, 1);`, `  const u16 = new Uint16Array(__memory.buffer, ptr, len);`, `  for (let i = 0; i < len; ++i) u16[i] = str.charCodeAt(i);`, `  return ptr;`, `}`, `const __imports = {`, `  env: {`, `    memory: __memory,`, `    abort(msg, file, line, col) {`, `      throw new Error(\`AbortError: \${__readStr(msg)} \u2014 \${__readStr(file)}:\${line}:\${col}\`);`, `    }`, `  }`, `};`, `const { instance: __inst } = await WebAssembly.instantiate(__bin, __imports);`);
-  const exportedFns = new Set(exportNames);
+  return [
+    `const __url = ${JSON.stringify(wasmSource)};`,
+    `const __res = await fetch(__url);`,
+    `const __bin = new Uint8Array(await __res.arrayBuffer());`
+  ];
+}
+function buildFunctionWrapper(exp) {
+  const stringParamIndices = new Set(exp.params?.map((p, i) => isComplexType(p.type) ? i : -1).filter((i) => i !== -1) ?? []);
+  const isStringReturn = exp.returnType && isComplexType(exp.returnType);
+  const argsList = exp.params?.map((p) => p.name).join(", ") ?? "";
+  const wrappedArgs = exp.params?.map((p, i) => stringParamIndices.has(i) ? `__writeStr(${p.name})` : p.name).join(", ") ?? "";
+  const lines = [
+    `export const ${exp.name} = (${argsList}) => {`,
+    `  const __r = __inst.exports.${exp.name}(${wrappedArgs});`,
+    isStringReturn ? `  return __readStr(__r);` : `  return __r;`,
+    `};`
+  ];
+  return lines;
+}
+var AS_INTERNAL_PREFIX = /^__/;
+function generateModule({
+  exportNames,
+  parsedExports,
+  wasmSource,
+  isInline
+}) {
+  const hasStringExports = parsedExports.some((exp) => exp.kind === "function" && (exp.returnType && isComplexType(exp.returnType) || exp.params?.some((p) => isComplexType(p.type))));
+  const lines = [
+    `// Auto-generated by bun-plugin-assemblyscript`,
+    `// Do not edit manually`,
+    ``,
+    ...buildWasmLoader(wasmSource, isInline),
+    ``,
+    ...buildRuntimeHelpers(hasStringExports),
+    ``,
+    `const __imports = {`,
+    `  env: {`,
+    `    memory: __memory,`,
+    `    abort(msg, file, line, col) {`,
+    `      throw new Error(\`AbortError: \${__readStr(msg)} \u2014 \${__readStr(file)}:\${line}:\${col}\`);`,
+    `    },`,
+    `  },`,
+    `};`,
+    ``,
+    `const { instance: __inst } = await WebAssembly.instantiate(__bin, __imports);`,
+    ``
+  ];
+  const remaining = new Set(exportNames.filter((n) => !AS_INTERNAL_PREFIX.test(n)));
   for (const exp of parsedExports) {
-    if (exp.kind === "function" && exportedFns.has(exp.name)) {
-      const isStringReturn = exp.returnType === "string" || exp.returnType === "String";
-      const stringParams = exp.params?.map((p, i) => p.type === "string" || p.type === "String" ? i : -1).filter((i) => i !== -1) || [];
-      if (isStringReturn || stringParams.length > 0) {
-        const argsList = exp.params?.map((p) => p.name).join(", ") || "";
-        const wrappedArgs = exp.params?.map((p, i) => stringParams.includes(i) ? `__writeStr(${p.name})` : p.name).join(", ") || "";
-        lines.push(`export const ${exp.name} = (${argsList}) => {`);
-        lines.push(`  const res = __inst.exports.${exp.name}(${wrappedArgs});`);
-        if (isStringReturn) {
-          lines.push(`  return __readStr(res);`);
-        } else {
-          lines.push(`  return res;`);
-        }
-        lines.push(`};`);
-      } else {
-        lines.push(`export const ${exp.name} = __inst.exports.${exp.name};`);
-      }
-      exportedFns.delete(exp.name);
-    }
-  }
-  for (const name of exportedFns) {
-    if (name.startsWith("__"))
+    if (exp.kind !== "function" || !remaining.has(exp.name))
       continue;
+    const needsWrapper = exp.returnType && isComplexType(exp.returnType) || exp.params?.some((p) => isComplexType(p.type));
+    if (needsWrapper) {
+      lines.push(...buildFunctionWrapper(exp));
+    } else {
+      lines.push(`export const ${exp.name} = __inst.exports.${exp.name};`);
+    }
+    remaining.delete(exp.name);
+  }
+  for (const name of remaining) {
     lines.push(`export const ${name} = __inst.exports.${name};`);
   }
   return lines.join(`
 `) + `
 `;
 }
+async function writeSourceMap(filePath, sourceMapBytes, cwd) {
+  try {
+    const source = await Bun.file(filePath).text();
+    const hash = createHash("sha256").update(source).digest("hex");
+    const cacheDir = join(cwd, ".cache", "bun-as", basename2(filePath));
+    const mapPath = join(cacheDir, `${hash}.wasm.map`);
+    await mkdir(cacheDir, { recursive: true });
+    await Bun.write(mapPath, sourceMapBytes);
+  } catch (err) {
+    console.warn("[bun-assemblyscript] Impossible d'\xE9crire le sourcemap :", err);
+  }
+}
 function assemblyScriptPlugin(options = {}) {
+  const {
+    compilerOverrides = {},
+    compileTimeout = 30000
+  } = options;
   return {
     name: "bun-plugin-assemblyscript",
-    async setup(build) {
-      let embedMode = "auto";
-      try {
-        if (existsSync("bunfig.toml")) {
-          const config = await Bun.file("bunfig.toml").text();
-          const match = config.match(/embedMode\s*=\s*(?:"|')([^"']+)(?:"|')/);
-          if (match)
-            embedMode = match[1];
-        }
-      } catch (e) {}
-      const isProd = isBuildMode(build) || false || build.config?.minify;
+    setup(build) {
       build.onLoad({ filter: /\.as$/ }, async (args) => {
+        const cwd = process.cwd();
+        const isProd = !!build.config?.minify;
+        const embedMode = options.embedMode ?? await readEmbedMode(cwd);
         let parsedExports = [];
         let hasComplex = false;
         try {
           const source = await Bun.file(args.path).text();
-          parsedExports = parseASExports(source);
+          const result2 = parseASExports(source);
+          parsedExports = result2.exports;
+          if (result2.warnings.length > 0) {
+            console.warn(`[bun-assemblyscript] ${result2.warnings.length} warning(s) dans ${basename2(args.path)} :`, result2.warnings.map((w) => w.message).join(", "));
+          }
           await generateDts(parsedExports, args.path);
           hasComplex = hasComplexExports(parsedExports);
-        } catch (e) {
-          console.warn("[bun-assemblyscript] G\xE9n\xE9ration de types \xE9chou\xE9e :", e);
+        } catch (err) {
+          console.warn("[bun-assemblyscript] G\xE9n\xE9ration de types \xE9chou\xE9e :", err);
         }
         const compilerOptions = {
           optimizeLevel: isProd ? 3 : 0,
@@ -417,9 +664,17 @@ function assemblyScriptPlugin(options = {}) {
           runtime: hasComplex ? "incremental" : "stub",
           sourceMap: !isProd,
           debug: !isProd,
-          ...options.compilerOverrides
+          ...compilerOverrides
         };
-        const result = await compile(args.path, compilerOptions);
+        let result;
+        try {
+          result = await compileWithTimeout(args.path, compilerOptions, compileTimeout);
+        } catch (err) {
+          return {
+            contents: "",
+            errors: [{ text: String(err) }]
+          };
+        }
         if (!result.success || !result.wasmBytes) {
           return {
             contents: "",
@@ -427,34 +682,36 @@ function assemblyScriptPlugin(options = {}) {
           };
         }
         if (!isProd && result.sourceMapBytes) {
-          const cacheDir = join(process.cwd(), ".cache", "bun-as", __require("path").basename(args.path));
-          const currentHash = __require("crypto").createHash("sha256").update(await Bun.file(args.path).text()).digest("hex");
-          const mapPath = join(cacheDir, currentHash + ".wasm.map");
-          try {
-            await __require("fs/promises").mkdir(cacheDir, { recursive: true });
-            await Bun.write(mapPath, result.sourceMapBytes);
-          } catch (e) {}
+          await writeSourceMap(args.path, result.sourceMapBytes, cwd);
         }
-        let finalMode = embedMode;
-        if (finalMode === "auto") {
-          finalMode = result.wasmBytes.length < 1e5 ? "inline" : "file";
-        }
+        const resolvedMode = embedMode === "auto" ? result.wasmBytes.length < 1e5 ? "inline" : "file" : embedMode;
         const exportsMap = await instantiate(result.wasmBytes);
         const exportNames = Object.keys(exportsMap).filter((k) => k !== "__data_end" && k !== "__heap_base");
-        if (finalMode === "inline") {
+        if (resolvedMode === "inline") {
           const b64 = Buffer.from(result.wasmBytes).toString("base64");
-          return { contents: generateModule(exportNames, parsedExports, b64, true), loader: "js" };
-        } else {
-          const outdir = build.config?.outdir || "./dist";
-          const fileName = "module-" + Bun.hash(result.wasmBytes) + ".wasm";
-          const outPath = join(process.cwd(), outdir, fileName);
-          try {
-            await __require("fs/promises").mkdir(join(process.cwd(), outdir), { recursive: true });
-            await Bun.write(outPath, result.wasmBytes);
-          } catch (e) {}
-          const wasmUrl = "./" + fileName;
-          return { contents: generateModule(exportNames, parsedExports, wasmUrl, false), loader: "js" };
+          return {
+            contents: generateModule({ exportNames, parsedExports, wasmSource: b64, isInline: true }),
+            loader: "js"
+          };
         }
+        const outdir = build.config?.outdir ?? "./dist";
+        const fileName = `module-${Bun.hash(result.wasmBytes)}.wasm`;
+        const outPath = join(cwd, outdir, fileName);
+        try {
+          await mkdir(join(cwd, outdir), { recursive: true });
+          await Bun.write(outPath, result.wasmBytes);
+        } catch (err) {
+          console.warn("[bun-assemblyscript] \xC9criture du .wasm \xE9chou\xE9e :", err);
+        }
+        return {
+          contents: generateModule({
+            exportNames,
+            parsedExports,
+            wasmSource: `./${fileName}`,
+            isInline: false
+          }),
+          loader: "js"
+        };
       });
     }
   };

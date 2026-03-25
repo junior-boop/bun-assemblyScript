@@ -105,6 +105,7 @@ export async function compile(
       "--outFile", outWasmPath,
       "--optimizeLevel", String(options.optimizeLevel ?? 0),
       "--runtime", options.runtime ?? "stub",
+      "--exportRuntime",
     ];
 
     if (options.shrinkLevel !== undefined) {

@@ -32,14 +32,23 @@ function readASString(memory: WebAssembly.Memory, ptr: number): string {
   const buf = memory.buffer;
   const dataView = new DataView(buf);
 
-  // Lire la longueur (code units UTF-16) stockée à ptr - 4
-  const byteLength = dataView.getInt32(ptr - 4, true); // en octets
-  const length = byteLength >>> 1;                     // en code-units
+  // Lire la longueur (bytes) stockée à ptr - 4
+  const byteLength = dataView.getInt32(ptr - 4, true);
+  const length = byteLength >>> 1; // en code-units
 
   if (length <= 0 || ptr + byteLength > buf.byteLength) return "";
 
   const u16 = new Uint16Array(buf, ptr, length);
-  return String.fromCharCode(...u16);
+
+  // Chunking pour éviter le stack overflow avec String.fromCharCode(...spread)
+  const CHUNK = 8192;
+  let result = "";
+  for (let i = 0; i < length; i += CHUNK) {
+    const end = Math.min(i + CHUNK, length);
+    const slice = u16.subarray(i, end);
+    result += String.fromCharCode.apply(null, slice as unknown as number[]);
+  }
+  return result;
 }
 
 /**
@@ -52,30 +61,15 @@ function readASString(memory: WebAssembly.Memory, ptr: number): string {
  * @returns Un objet plat ne contenant que les exports de type `function`.
  */
 export async function instantiate(wasmBytes: Uint8Array): Promise<ASExports> {
-  const memory = new WebAssembly.Memory({ initial: 1 });
-
-  const imports = {
+  const { instance } = await WebAssembly.instantiate(wasmBytes, {
     env: {
-      memory,
-      abort(
-        msgPtr: number,
-        filePtr: number,
-        line: number,
-        col: number
-      ): void {
-        const message = readASString(memory, msgPtr);
-        const file = readASString(memory, filePtr);
-        throw new AbortError(
-          `AbortError: ${message || "(no message)"} — ${file || "(unknown file)"}:${line}:${col}`,
-          file,
-          line,
-          col
-        );
-      },
+      abort() {},
     },
-  };
+  });
 
-  const { instance } = await WebAssembly.instantiate(wasmBytes, imports);
+  // Le module exporte sa propre mémoire (initialisée par la data section)
+  const memory = instance.exports.memory as WebAssembly.Memory;
+
   const rawExports = instance.exports as Record<string, unknown>;
 
   // Ré-exporter nommément chaque fonction (objet plat, pas instance.exports)
@@ -85,6 +79,9 @@ export async function instantiate(wasmBytes: Uint8Array): Promise<ASExports> {
       flatExports[key] = value as (...args: number[]) => number | void;
     }
   }
+
+  // Attacher la mémoire pour readASString
+  flatExports.__memory = memory as unknown as (...args: number[]) => number | void;
 
   return flatExports;
 }

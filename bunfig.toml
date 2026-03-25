@@ -2,7 +2,7 @@
 
 [test]
 # Précharger le plugin avant les tests pour que les imports .as fonctionnent
-preload = ["./preload.ts", "bun-plugin-assemblyscript"]
+preload = ["./preload.ts"]
 
 [run]
 # Précharger le plugin pour bun run <script>
