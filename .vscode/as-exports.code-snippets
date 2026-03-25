@@ -1,0 +1,26 @@
+{
+  "add (math.as)": {
+    "prefix": "add",
+    "scope": "typescript,javascript",
+    "body": [
+      "add(${1:a}, ${2:b})"
+    ],
+    "description": "Appel de la fonction add depuis math.as (retourne number)"
+  },
+  "multiply (math.as)": {
+    "prefix": "multiply",
+    "scope": "typescript,javascript",
+    "body": [
+      "multiply(${1:a}, ${2:b})"
+    ],
+    "description": "Appel de la fonction multiply depuis math.as (retourne number)"
+  },
+  "subtract (math.as)": {
+    "prefix": "subtract",
+    "scope": "typescript,javascript",
+    "body": [
+      "subtract(${1:a}, ${2:b})"
+    ],
+    "description": "Appel de la fonction subtract depuis math.as (retourne number)"
+  }
+}

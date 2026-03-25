@@ -4,7 +4,7 @@ import { join, basename } from "path";
 import { compile } from "../compiler";
 import { get, set, computeHash, invalidate } from "../cache";
 import { parseASExports } from "../typegen/parser";
-import { generateDts } from "../typegen/generator";
+import { generateDts, updateSnippets } from "../typegen/generator";
 import { logSuccess, logError, logStart } from "./logger";
 
 // Conserve les watchers et les hashes en mémoire vive
@@ -50,9 +50,10 @@ async function processFile(filePath: string, isInitial: boolean, isProd = false)
       return;
     }
 
-    // Régénération automatique des définitions TypeScript
+    // Régénération automatique des définitions TypeScript et Snippets
     const parsed = parseASExports(text);
     await generateDts(parsed, filePath);
+    await updateSnippets(parsed, filePath);
     const dtsContent = await Bun.file(filePath + ".d.ts").text();
 
     // Enregistrer dans le cache disque

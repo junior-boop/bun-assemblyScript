@@ -1,5 +1,7 @@
 import { mapType } from "./typemap";
 import { type ASExport } from "./parser";
+import { join, basename } from "path";
+import { existsSync } from "fs";
 
 /**
  * Génère le contenu d'un fichier .d.ts à partir d'un tableau d'exports AS.
@@ -59,4 +61,49 @@ export async function generateDts(
   }
 
   await Bun.write(dtsPath, dtsContent);
+}
+
+/**
+ * Génère ou met à jour un fichier de snippets VSCode pour les exports d'un fichier .as.
+ */
+export async function updateSnippets(
+  exports: ASExport[],
+  sourcePath: string
+): Promise<void> {
+  const fileName = basename(sourcePath);
+  const vscodeDir = join(process.cwd(), ".vscode");
+  const snippetsPath = join(vscodeDir, "as-exports.code-snippets");
+
+  if (!existsSync(vscodeDir)) return;
+
+  let allSnippets: any = {};
+  if (existsSync(snippetsPath)) {
+    try {
+      allSnippets = await Bun.file(snippetsPath).json();
+    } catch (e) {}
+  }
+
+  // Supprimer les anciens snippets liés à ce fichier pour éviter les doublons
+  for (const key in allSnippets) {
+    if (key.includes(`(${fileName})`)) {
+      delete allSnippets[key];
+    }
+  }
+
+  // Ajouter les nouveaux snippets
+  for (const exp of exports) {
+    if (exp.kind === "function") {
+      const params = exp.params!.map((p, i) => `\${${i + 1}:${p.name}}`).join(", ");
+      const snippetKey = `${exp.name} (${fileName})`;
+      
+      allSnippets[snippetKey] = {
+        prefix: exp.name,
+        scope: "typescript,javascript",
+        body: [`${exp.name}(${params})`],
+        description: `Appel de la fonction ${exp.name} depuis ${fileName} (retourne ${mapType(exp.returnType!)})`,
+      };
+    }
+  }
+
+  await Bun.write(snippetsPath, JSON.stringify(allSnippets, null, 2));
 }
