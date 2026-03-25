@@ -29,11 +29,21 @@ interface GenerateModuleOptions {
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-const COMPLEX_TYPE_PATTERNS = ["string", "String", "Array", "Map", "Set", "Uint8Array", "Int32Array"] as const;
+const COMPLEX_TYPE_PATTERNS = [
+  "string",
+  "String",
+  "Array",
+  "Map",
+  "Set",
+  "Uint8Array",
+  "Int32Array",
+] as const;
 
 function isComplexType(t: string): boolean {
   const trim = t.trim();
-  return COMPLEX_TYPE_PATTERNS.some((p) => trim === p || trim.startsWith(p + "<"));
+  return COMPLEX_TYPE_PATTERNS.some(
+    (p) => trim === p || trim.startsWith(p + "<"),
+  );
 }
 
 function hasComplexExports(exports: ASExport[]): boolean {
@@ -45,9 +55,13 @@ function hasComplexExports(exports: ASExport[]): boolean {
 
     // ASMethod[] — compatible avec la nouvelle interface
     const methods = exp.methods as ASMethod[] | undefined;
-    if (methods?.length && hasComplexExports(
-      methods.map((m) => ({ ...m, kind: "function" as const }))
-    )) return true;
+    if (
+      methods?.length &&
+      hasComplexExports(
+        methods.map((m) => ({ ...m, kind: "function" as const })),
+      )
+    )
+      return true;
   }
   return false;
 }
@@ -73,10 +87,13 @@ async function readEmbedMode(cwd: string): Promise<EmbedMode> {
 async function compileWithTimeout(
   path: string,
   options: CompilerOptions,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<Awaited<ReturnType<typeof compile>>> {
   const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`Compilation timeout after ${timeoutMs}ms`)), timeoutMs)
+    setTimeout(
+      () => reject(new Error(`Compilation timeout after ${timeoutMs}ms`)),
+      timeoutMs,
+    ),
   );
   return Promise.race([compile(path, options), timeout]);
 }
@@ -147,21 +164,22 @@ function buildFunctionWrapper(exp: ASExport): string[] {
   const stringParamIndices = new Set(
     exp.params
       ?.map((p, i) => (isComplexType(p.type) ? i : -1))
-      .filter((i) => i !== -1) ?? []
+      .filter((i) => i !== -1) ?? [],
   );
   const isStringReturn = exp.returnType && isComplexType(exp.returnType);
   const argsList = exp.params?.map((p) => p.name).join(", ") ?? "";
 
-  const wrappedArgs = exp.params
-    ?.map((p, i) => (stringParamIndices.has(i) ? `__writeStr(${p.name})` : p.name))
-    .join(", ") ?? "";
+  const wrappedArgs =
+    exp.params
+      ?.map((p, i) =>
+        stringParamIndices.has(i) ? `__writeStr(${p.name})` : p.name,
+      )
+      .join(", ") ?? "";
 
   const lines = [
     `export const ${exp.name} = (${argsList}) => {`,
     `  const __r = __inst.exports.${exp.name}(${wrappedArgs});`,
-    isStringReturn
-      ? `  return __readStr(__r);`
-      : `  return __r;`,
+    isStringReturn ? `  return __readStr(__r);` : `  return __r;`,
     `};`,
   ];
   return lines;
@@ -176,11 +194,11 @@ function generateModule({
   isInline,
 }: GenerateModuleOptions): string {
   // Détecter si des exports utilisent des types string
-  const hasStringExports = parsedExports.some((exp) =>
-    exp.kind === "function" && (
-      (exp.returnType && isComplexType(exp.returnType)) ||
-      exp.params?.some((p) => isComplexType(p.type))
-    )
+  const hasStringExports = parsedExports.some(
+    (exp) =>
+      exp.kind === "function" &&
+      ((exp.returnType && isComplexType(exp.returnType)) ||
+        exp.params?.some((p) => isComplexType(p.type))),
   );
 
   const lines: string[] = [
@@ -194,7 +212,9 @@ function generateModule({
   ];
 
   // Index des exports parsés
-  const remaining = new Set(exportNames.filter((n) => !AS_INTERNAL_PREFIX.test(n)));
+  const remaining = new Set(
+    exportNames.filter((n) => !AS_INTERNAL_PREFIX.test(n)),
+  );
 
   for (const exp of parsedExports) {
     if (exp.kind !== "function" || !remaining.has(exp.name)) continue;
@@ -224,7 +244,7 @@ function generateModule({
 async function writeSourceMap(
   filePath: string,
   sourceMapBytes: Uint8Array,
-  cwd: string
+  cwd: string,
 ): Promise<void> {
   try {
     const source = await Bun.file(filePath).text();
@@ -235,17 +255,17 @@ async function writeSourceMap(
     await mkdir(cacheDir, { recursive: true });
     await Bun.write(mapPath, sourceMapBytes);
   } catch (err) {
-    console.warn("[bun-assemblyscript] Impossible d'écrire le sourcemap :", err);
+    console.warn(
+      "[bun-assemblyscript] Impossible d'écrire le sourcemap :",
+      err,
+    );
   }
 }
 
 // ─── Plugin principal ─────────────────────────────────────────
 
 export function assemblyScriptPlugin(options: PluginOptions = {}): BunPlugin {
-  const {
-    compilerOverrides = {},
-    compileTimeout = 30_000,
-  } = options;
+  const { compilerOverrides = {}, compileTimeout = 30_000 } = options;
 
   return {
     name: "bun-plugin-assemblyscript",
@@ -253,8 +273,10 @@ export function assemblyScriptPlugin(options: PluginOptions = {}): BunPlugin {
     setup(build) {
       build.onLoad({ filter: /\.as$/ }, async (args) => {
         const cwd = process.cwd();
-        const isProd = process.env.NODE_ENV === "production" || !!build.config?.minify;
-        const embedMode: EmbedMode = options.embedMode ?? await readEmbedMode(cwd);
+        const isProd =
+          process.env.NODE_ENV === "production" || !!build.config?.minify;
+        const embedMode: EmbedMode =
+          options.embedMode ?? (await readEmbedMode(cwd));
 
         // ── 1. Parse des exports pour le typage et le runtime ──
         let parsedExports: ASExport[] = [];
@@ -269,14 +291,17 @@ export function assemblyScriptPlugin(options: PluginOptions = {}): BunPlugin {
           if (result.warnings.length > 0) {
             console.warn(
               `[bun-assemblyscript] ${result.warnings.length} warning(s) dans ${basename(args.path)} :`,
-              result.warnings.map((w) => w.message).join(", ")
+              result.warnings.map((w) => w.message).join(", "),
             );
           }
 
           await generateDts(parsedExports, args.path);
           hasComplex = hasComplexExports(parsedExports);
         } catch (err) {
-          console.warn("[bun-assemblyscript] Génération de types échouée :", err);
+          console.warn(
+            "[bun-assemblyscript] Génération de types échouée :",
+            err,
+          );
         }
 
         // ── 2. Compilation AssemblyScript ──────────────────────
@@ -291,7 +316,11 @@ export function assemblyScriptPlugin(options: PluginOptions = {}): BunPlugin {
 
         let result: Awaited<ReturnType<typeof compile>>;
         try {
-          result = await compileWithTimeout(args.path, compilerOptions, compileTimeout);
+          result = await compileWithTimeout(
+            args.path,
+            compilerOptions,
+            compileTimeout,
+          );
         } catch (err) {
           return {
             contents: "",
@@ -314,25 +343,40 @@ export function assemblyScriptPlugin(options: PluginOptions = {}): BunPlugin {
         // ── 4. Stratégie d'embedding ───────────────────────────
         const resolvedMode: Exclude<EmbedMode, "auto"> =
           embedMode === "auto"
-            ? result.wasmBytes.length < 100_000 ? "inline" : "file"
+            ? result.wasmBytes.length < 100_000
+              ? "inline"
+              : "file"
             : embedMode;
 
         const exportsMap = await instantiate(result.wasmBytes);
         const exportNames = Object.keys(exportsMap).filter(
-          (k) => k !== "__data_end" && k !== "__heap_base" && k !== "__memory" && k !== "memory"
+          (k) =>
+            k !== "__data_end" &&
+            k !== "__heap_base" &&
+            k !== "__memory" &&
+            k !== "memory",
         );
 
         if (resolvedMode === "inline") {
           const b64 = Buffer.from(result.wasmBytes).toString("base64");
           return {
-            contents: generateModule({ exportNames, parsedExports, wasmSource: b64, isInline: true }),
+            contents: generateModule({
+              exportNames,
+              parsedExports,
+              wasmSource: b64,
+              isInline: true,
+            }),
             loader: "js",
           };
         }
 
         // ── 5. File mode : écriture du .wasm dans outdir ───────
         const outdir = build.config?.outdir ?? "./dist";
-        const fileName = `module-${Bun.hash(result.wasmBytes)}.wasm`;
+        const wasmHash = createHash("sha256")
+          .update(result.wasmBytes)
+          .digest("hex")
+          .substring(0, 8);
+        const fileName = `module-${wasmHash}.wasm`;
         const outPath = join(cwd, outdir, fileName);
 
         try {

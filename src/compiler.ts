@@ -1,5 +1,6 @@
 import { resolve, basename } from "path";
 import { tmpdir } from "os";
+import { unlink } from "fs/promises";
 
 export interface CompilerOptions {
   optimizeLevel?: 0 | 1 | 2 | 3;
@@ -37,7 +38,7 @@ function resolveAscJs(cwd: string): string {
       "AssemblyScript compiler (asc) introuvable.",
       "Installez-le avec :",
       "  bun add -d assemblyscript",
-    ].join("\n")
+    ].join("\n"),
   );
 }
 
@@ -49,13 +50,23 @@ function resolveAscJs(cwd: string): string {
  * puis on supprime le temporaire.
  *
  * @returns Chemin absolu vers le fichier temporaire `.ts`.
+ * @throws Error si la lecture du fichier ou l'écriture temporaire échoue.
  */
 async function createTsBridge(asFilePath: string): Promise<string> {
-  const source = await Bun.file(asFilePath).text();
-  const baseName = basename(asFilePath, ".as");
-  const tmpPath = resolve(tmpdir(), `asc_bridge_${baseName}_${Date.now()}.ts`);
-  await Bun.write(tmpPath, source);
-  return tmpPath;
+  try {
+    const source = await Bun.file(asFilePath).text();
+    const baseName = basename(asFilePath, ".as");
+    const tmpPath = resolve(
+      tmpdir(),
+      `asc_bridge_${baseName}_${Date.now()}.ts`,
+    );
+    await Bun.write(tmpPath, source);
+    return tmpPath;
+  } catch (err) {
+    throw new Error(
+      `Failed to create TypeScript bridge for ${asFilePath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**
@@ -73,7 +84,7 @@ async function createTsBridge(asFilePath: string): Promise<string> {
  */
 export async function compile(
   filename: string,
-  options: CompilerOptions = {}
+  options: CompilerOptions = {},
 ): Promise<CompilerResult> {
   const errors: string[] = [];
 
@@ -102,9 +113,12 @@ export async function compile(
     const args = [
       ascJs,
       tsBridgePath,
-      "--outFile", outWasmPath,
-      "--optimizeLevel", String(options.optimizeLevel ?? 0),
-      "--runtime", options.runtime ?? "stub",
+      "--outFile",
+      outWasmPath,
+      "--optimizeLevel",
+      String(options.optimizeLevel ?? 0),
+      "--runtime",
+      options.runtime ?? "stub",
       "--exportRuntime",
     ];
 
@@ -135,7 +149,15 @@ export async function compile(
     }
 
     if (exitCode !== 0) {
-      return { success: false, wasmBytes: null, sourceMapBytes: null, errors };
+      return {
+        success: false,
+        wasmBytes: null,
+        sourceMapBytes: null,
+        errors:
+          errors.length > 0
+            ? errors
+            : [`Compilation failed with exit code ${exitCode}`],
+      };
     }
 
     // 5. Lire le WASM généré
@@ -155,23 +177,31 @@ export async function compile(
         success: false,
         wasmBytes: null,
         sourceMapBytes: null,
-        errors: [...errors, "Aucun output WASM produit par asc."],
+        errors: [...errors, "No WASM output produced by asc compiler."],
       };
     }
 
     return { success: true, wasmBytes, sourceMapBytes, errors };
-
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    errors.push(message);
+    // If TsBridge creation failed, the error is already descriptive
+    if (message.includes("Failed to create TypeScript bridge")) {
+      errors.push(message);
+    } else {
+      errors.push(`Compilation error: ${message}`);
+    }
     return { success: false, wasmBytes: null, sourceMapBytes: null, errors };
-
   } finally {
     // 6. Nettoyer les fichiers temporaires dans tous les cas
-    const fs = await import("fs/promises");
-    for (const tmpFile of [tsBridgePath, outWasmPath, outWasmPath ? outWasmPath + ".map" : null]) {
+    for (const tmpFile of [
+      tsBridgePath,
+      outWasmPath,
+      outWasmPath ? outWasmPath + ".map" : null,
+    ]) {
       if (tmpFile) {
-        try { await fs.unlink(tmpFile); } catch {}
+        try {
+          await unlink(tmpFile);
+        } catch {}
       }
     }
   }

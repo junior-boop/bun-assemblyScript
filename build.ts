@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 
 console.log("Building bun-assemblyscript...");
@@ -67,5 +67,16 @@ export default assemblyScriptPlugin;
 `;
 
 writeFileSync(join(outDir, "index.d.ts"), indexDts.trim());
+
+// 4. Copy assemblyscript.d.ts to dist
+const asDtsPath = join(".", "assemblyscript.d.ts");
+if (existsSync(asDtsPath)) {
+  try {
+    copyFileSync(asDtsPath, join(outDir, "assemblyscript.d.ts"));
+    console.log("✓ Copied assemblyscript.d.ts to dist/");
+  } catch (err) {
+    console.warn("⚠ Failed to copy assemblyscript.d.ts:", err);
+  }
+}
 
 console.log("Build complete!");

@@ -1,5 +1,6 @@
 import { join, basename } from "path";
 import { existsSync } from "fs";
+import { mkdir, rm } from "fs/promises";
 
 export interface CacheMeta {
   hash: string;
@@ -34,7 +35,7 @@ async function checkGitignore() {
     if (!content.includes(".cache/bun-as")) {
       await Bun.write(
         gitignorePath,
-        content + "\n# bun-assemblyscript cache\n.cache/bun-as/\n"
+        content + "\n# bun-assemblyscript cache\n.cache/bun-as/\n",
       );
     }
   } catch (err) {
@@ -48,8 +49,7 @@ async function checkGitignore() {
  */
 async function ensureCacheDir(fileName: string) {
   const dir = join(CACHE_DIR, fileName);
-  const fs = await import("fs/promises");
-  await fs.mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true });
   await checkGitignore();
   return dir;
 }
@@ -59,7 +59,7 @@ async function ensureCacheDir(fileName: string) {
  */
 export async function get(
   filePath: string,
-  currentHash: string
+  currentHash: string,
 ): Promise<CacheEntry | null> {
   const baseName = basename(filePath);
   const dir = join(CACHE_DIR, baseName);
@@ -69,13 +69,13 @@ export async function get(
 
   try {
     const meta: CacheMeta = await Bun.file(metaPath).json();
-    
+
     // Si la version d'asc a changé, le cache est totalement invalide
     if (meta.ascVersion !== ASC_VERSION) {
       await invalidate(filePath);
       return null;
     }
-    
+
     // Si le hash a changé, le cache n'est pas le bon
     if (meta.hash !== currentHash) {
       return null;
@@ -102,7 +102,7 @@ export async function set(
   filePath: string,
   currentHash: string,
   wasmBytes: Uint8Array,
-  dtsContent: string
+  dtsContent: string,
 ) {
   const baseName = basename(filePath);
   const dir = await ensureCacheDir(baseName);
@@ -129,7 +129,6 @@ export async function invalidate(filePath: string) {
   const baseName = basename(filePath);
   const dir = join(CACHE_DIR, baseName);
   try {
-    const fs = await import("fs/promises");
-    await fs.rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true });
   } catch {}
 }

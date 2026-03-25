@@ -1,41 +1,38 @@
-var __create = Object.create;
-var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __toESM = (mod, isNodeMode, target) => {
-  target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: () => mod[key],
-        enumerable: true
-      });
-  return to;
-};
-var __moduleCache = /* @__PURE__ */ new WeakMap;
+function __accessProp(key) {
+  return this[key];
+}
 var __toCommonJS = (from) => {
-  var entry = __moduleCache.get(from), desc;
+  var entry = (__moduleCache ??= new WeakMap).get(from), desc;
   if (entry)
     return entry;
   entry = __defProp({}, "__esModule", { value: true });
-  if (from && typeof from === "object" || typeof from === "function")
-    __getOwnPropNames(from).map((key) => !__hasOwnProp.call(entry, key) && __defProp(entry, key, {
-      get: () => from[key],
-      enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
-    }));
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (var key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(entry, key))
+        __defProp(entry, key, {
+          get: __accessProp.bind(from, key),
+          enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
+        });
+  }
   __moduleCache.set(from, entry);
   return entry;
 };
+var __moduleCache;
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: (newValue) => all[name] = () => newValue
+      set: __exportSetter.bind(all, name)
     });
 };
 
@@ -53,6 +50,7 @@ module.exports = __toCommonJS(exports_bun_assemblyScript);
 // src/compiler.ts
 var import_path = require("path");
 var import_os = require("os");
+var import_promises = require("fs/promises");
 function resolveAscJs(cwd) {
   const candidates = [
     import_path.resolve(cwd, "node_modules", "assemblyscript", "bin", "asc.js"),
@@ -62,8 +60,7 @@ function resolveAscJs(cwd) {
     try {
       if (Bun.file(candidate).size > 0)
         return candidate;
-    } catch {
-    }
+    } catch {}
   }
   throw new Error([
     "AssemblyScript compiler (asc) introuvable.",
@@ -73,11 +70,15 @@ function resolveAscJs(cwd) {
 `));
 }
 async function createTsBridge(asFilePath) {
-  const source = await Bun.file(asFilePath).text();
-  const baseName = import_path.basename(asFilePath, ".as");
-  const tmpPath = import_path.resolve(import_os.tmpdir(), `asc_bridge_${baseName}_${Date.now()}.ts`);
-  await Bun.write(tmpPath, source);
-  return tmpPath;
+  try {
+    const source = await Bun.file(asFilePath).text();
+    const baseName = import_path.basename(asFilePath, ".as");
+    const tmpPath = import_path.resolve(import_os.tmpdir(), `asc_bridge_${baseName}_${Date.now()}.ts`);
+    await Bun.write(tmpPath, source);
+    return tmpPath;
+  } catch (err) {
+    throw new Error(`Failed to create TypeScript bridge for ${asFilePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 async function compile(filename, options = {}) {
   const errors = [];
@@ -105,7 +106,8 @@ async function compile(filename, options = {}) {
       "--optimizeLevel",
       String(options.optimizeLevel ?? 0),
       "--runtime",
-      options.runtime ?? "stub"
+      options.runtime ?? "stub",
+      "--exportRuntime"
     ];
     if (options.shrinkLevel !== undefined) {
       args.push("--shrinkLevel", String(options.shrinkLevel));
@@ -131,7 +133,12 @@ async function compile(filename, options = {}) {
         errors.push(trimmed);
     }
     if (exitCode !== 0) {
-      return { success: false, wasmBytes: null, sourceMapBytes: null, errors };
+      return {
+        success: false,
+        wasmBytes: null,
+        sourceMapBytes: null,
+        errors: errors.length > 0 ? errors : [`Compilation failed with exit code ${exitCode}`]
+      };
     }
     const wasmFile = Bun.file(outWasmPath);
     const wasmBytes = new Uint8Array(await wasmFile.arrayBuffer());
@@ -147,22 +154,28 @@ async function compile(filename, options = {}) {
         success: false,
         wasmBytes: null,
         sourceMapBytes: null,
-        errors: [...errors, "Aucun output WASM produit par asc."]
+        errors: [...errors, "No WASM output produced by asc compiler."]
       };
     }
     return { success: true, wasmBytes, sourceMapBytes, errors };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    errors.push(message);
+    if (message.includes("Failed to create TypeScript bridge")) {
+      errors.push(message);
+    } else {
+      errors.push(`Compilation error: ${message}`);
+    }
     return { success: false, wasmBytes: null, sourceMapBytes: null, errors };
   } finally {
-    const fs = await import("fs/promises");
-    for (const tmpFile of [tsBridgePath, outWasmPath, outWasmPath ? outWasmPath + ".map" : null]) {
+    for (const tmpFile of [
+      tsBridgePath,
+      outWasmPath,
+      outWasmPath ? outWasmPath + ".map" : null
+    ]) {
       if (tmpFile) {
         try {
-          await fs.unlink(tmpFile);
-        } catch {
-        }
+          await import_promises.unlink(tmpFile);
+        } catch {}
       }
     }
   }
@@ -181,38 +194,13 @@ class AbortError extends Error {
     this.name = "AbortError";
   }
 }
-function readASString(memory, ptr) {
-  if (ptr === 0)
-    return "";
-  const buf = memory.buffer;
-  const dataView = new DataView(buf);
-  const byteLength = dataView.getInt32(ptr - 4, true);
-  const length = byteLength >>> 1;
-  if (length <= 0 || ptr + byteLength > buf.byteLength)
-    return "";
-  const u16 = new Uint16Array(buf, ptr, length);
-  const CHUNK = 8192;
-  let result = "";
-  for (let i = 0;i < length; i += CHUNK) {
-    const end = Math.min(i + CHUNK, length);
-    const slice = u16.subarray(i, end);
-    result += String.fromCharCode.apply(null, slice);
-  }
-  return result;
-}
 async function instantiate(wasmBytes) {
-  const memory = new WebAssembly.Memory({ initial: 1 });
-  const imports = {
+  const { instance } = await WebAssembly.instantiate(wasmBytes, {
     env: {
-      memory,
-      abort(msgPtr, filePtr, line, col) {
-        const message = readASString(memory, msgPtr);
-        const file = readASString(memory, filePtr);
-        throw new AbortError(`AbortError: ${message || "(no message)"} — ${file || "(unknown file)"}:${line}:${col}`, file, line, col);
-      }
+      abort() {}
     }
-  };
-  const { instance } = await WebAssembly.instantiate(wasmBytes, imports);
+  });
+  const memory = instance.exports.memory;
   const rawExports = instance.exports;
   const flatExports = {};
   for (const [key, value] of Object.entries(rawExports)) {
@@ -476,6 +464,7 @@ function mapType(asType) {
 }
 
 // src/typegen/generator.ts
+var import_crypto = require("crypto");
 async function generateDts(exports2, sourcePath) {
   const lines = [
     "// auto-generated by bun-plugin-assemblyscript — do not edit",
@@ -502,24 +491,31 @@ async function generateDts(exports2, sourcePath) {
 `) + `
 `;
   const dtsPath = sourcePath + ".d.ts";
-  const newHash = Bun.hash(dtsContent);
+  const newHash = import_crypto.createHash("sha256").update(dtsContent).digest("hex");
   try {
     const existingContent = await Bun.file(dtsPath).text();
-    const oldHash = Bun.hash(existingContent);
+    const oldHash = import_crypto.createHash("sha256").update(existingContent).digest("hex");
     if (newHash === oldHash) {
       return;
     }
-  } catch (err) {
-  }
+  } catch (err) {}
   await Bun.write(dtsPath, dtsContent);
 }
 
 // src/plugin.ts
 var import_path2 = require("path");
 var import_fs = require("fs");
-var import_promises = require("fs/promises");
-var import_crypto = require("crypto");
-var COMPLEX_TYPE_PATTERNS = ["string", "String", "Array", "Map", "Set", "Uint8Array", "Int32Array"];
+var import_promises2 = require("fs/promises");
+var import_crypto2 = require("crypto");
+var COMPLEX_TYPE_PATTERNS = [
+  "string",
+  "String",
+  "Array",
+  "Map",
+  "Set",
+  "Uint8Array",
+  "Int32Array"
+];
 function isComplexType(t) {
   const trim = t.trim();
   return COMPLEX_TYPE_PATTERNS.some((p) => trim === p || trim.startsWith(p + "<"));
@@ -558,7 +554,12 @@ async function compileWithTimeout(path, options, timeoutMs) {
 }
 function buildRuntimeHelpers(hasStringExports) {
   const helpers = [
-    `const __memory = new WebAssembly.Memory({ initial: 1 });`,
+    `const { instance: __inst } = await WebAssembly.instantiate(__bin, {`,
+    `  env: { abort() {} },`,
+    `});`,
+    ``,
+    `// Utiliser la mémoire exportée par le module (initialisée par la data section)`,
+    `const __memory = __inst.exports.memory;`,
     ``,
     `function __readStr(ptr) {`,
     `  if (!ptr) return "";`,
@@ -621,17 +622,6 @@ function generateModule({
     ...buildWasmLoader(wasmSource, isInline),
     ``,
     ...buildRuntimeHelpers(hasStringExports),
-    ``,
-    `const __imports = {`,
-    `  env: {`,
-    `    memory: __memory,`,
-    `    abort(msg, file, line, col) {`,
-    `      throw new Error(\`AbortError: \${__readStr(msg)} — \${__readStr(file)}:\${line}:\${col}\`);`,
-    `    },`,
-    `  },`,
-    `};`,
-    ``,
-    `const { instance: __inst } = await WebAssembly.instantiate(__bin, __imports);`,
     ``
   ];
   const remaining = new Set(exportNames.filter((n) => !AS_INTERNAL_PREFIX.test(n)));
@@ -656,20 +646,17 @@ function generateModule({
 async function writeSourceMap(filePath, sourceMapBytes, cwd) {
   try {
     const source = await Bun.file(filePath).text();
-    const hash = import_crypto.createHash("sha256").update(source).digest("hex");
+    const hash = import_crypto2.createHash("sha256").update(source).digest("hex");
     const cacheDir = import_path2.join(cwd, ".cache", "bun-as", import_path2.basename(filePath));
     const mapPath = import_path2.join(cacheDir, `${hash}.wasm.map`);
-    await import_promises.mkdir(cacheDir, { recursive: true });
+    await import_promises2.mkdir(cacheDir, { recursive: true });
     await Bun.write(mapPath, sourceMapBytes);
   } catch (err) {
     console.warn("[bun-assemblyscript] Impossible d'écrire le sourcemap :", err);
   }
 }
 function assemblyScriptPlugin(options = {}) {
-  const {
-    compilerOverrides = {},
-    compileTimeout = 30000
-  } = options;
+  const { compilerOverrides = {}, compileTimeout = 30000 } = options;
   return {
     name: "bun-plugin-assemblyscript",
     setup(build) {
@@ -719,19 +706,25 @@ function assemblyScriptPlugin(options = {}) {
         }
         const resolvedMode = embedMode === "auto" ? result.wasmBytes.length < 1e5 ? "inline" : "file" : embedMode;
         const exportsMap = await instantiate(result.wasmBytes);
-        const exportNames = Object.keys(exportsMap).filter((k) => k !== "__data_end" && k !== "__heap_base");
+        const exportNames = Object.keys(exportsMap).filter((k) => k !== "__data_end" && k !== "__heap_base" && k !== "__memory" && k !== "memory");
         if (resolvedMode === "inline") {
           const b64 = Buffer.from(result.wasmBytes).toString("base64");
           return {
-            contents: generateModule({ exportNames, parsedExports, wasmSource: b64, isInline: true }),
+            contents: generateModule({
+              exportNames,
+              parsedExports,
+              wasmSource: b64,
+              isInline: true
+            }),
             loader: "js"
           };
         }
         const outdir = build.config?.outdir ?? "./dist";
-        const fileName = `module-${Bun.hash(result.wasmBytes)}.wasm`;
+        const wasmHash = import_crypto2.createHash("sha256").update(result.wasmBytes).digest("hex").substring(0, 8);
+        const fileName = `module-${wasmHash}.wasm`;
         const outPath = import_path2.join(cwd, outdir, fileName);
         try {
-          await import_promises.mkdir(import_path2.join(cwd, outdir), { recursive: true });
+          await import_promises2.mkdir(import_path2.join(cwd, outdir), { recursive: true });
           await Bun.write(outPath, result.wasmBytes);
         } catch (err) {
           console.warn("[bun-assemblyscript] Écriture du .wasm échouée :", err);

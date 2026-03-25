@@ -11,7 +11,11 @@ import { logSuccess, logError, logStart } from "./logger";
 const hashes = new Map<string, string>();
 const watchers = new Map<string, any>();
 
-async function processFile(filePath: string, isInitial: boolean, isProd = false) {
+async function processFile(
+  filePath: string,
+  isInitial: boolean,
+  isProd = false,
+) {
   try {
     const text = await Bun.file(filePath).text();
     const hash = await computeHash(text);
@@ -23,7 +27,7 @@ async function processFile(filePath: string, isInitial: boolean, isProd = false)
         const cached = await get(filePath, hash);
         if (cached) return;
       } else {
-        return; 
+        return;
       }
     }
 
@@ -34,7 +38,10 @@ async function processFile(filePath: string, isInitial: boolean, isProd = false)
     const cached = await get(filePath, hash);
     if (cached) {
       if (!isInitial) {
-        logSuccess(basename(filePath), Math.round(performance.now() - startTime) + " (cached)");
+        logSuccess(
+          basename(filePath),
+          Math.round(performance.now() - startTime) + " (cached)",
+        );
       }
       return;
     }
@@ -52,8 +59,8 @@ async function processFile(filePath: string, isInitial: boolean, isProd = false)
 
     // Régénération automatique des définitions TypeScript et Snippets
     const parsed = parseASExports(text);
-    await generateDts(parsed, filePath);
-    await updateSnippets(parsed, filePath);
+    await generateDts(parsed.exports, filePath);
+    await updateSnippets(parsed.exports, filePath);
     const dtsContent = await Bun.file(filePath + ".d.ts").text();
 
     // Enregistrer dans le cache disque
@@ -66,7 +73,9 @@ async function processFile(filePath: string, isInitial: boolean, isProd = false)
       await invalidate(filePath);
       hashes.delete(filePath);
     } else {
-      logError(basename(filePath), [err instanceof Error ? err.message : String(err)]);
+      logError(basename(filePath), [
+        err instanceof Error ? err.message : String(err),
+      ]);
     }
   }
 }
