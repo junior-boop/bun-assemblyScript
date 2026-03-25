@@ -1,0 +1,29 @@
+{
+  "name": "bun-assemblyscript",
+  "version": "0.1.2",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "bun-as": "./src/bin/watch.ts"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "scripts": {
+    "build": "bun run build.ts",
+    "test": "bun test",
+    "postinstall": "bun run ./src/install/index.ts"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.11"
+  },
+  "type": "module"
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.cache/bun-as/
+*.wasm
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

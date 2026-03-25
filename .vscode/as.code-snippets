@@ -1,0 +1,32 @@
+{
+  "AssemblyScript Export": {
+    "prefix": "asexport",
+    "scope": "typescript",
+    "body": [
+      "export function ${1:name}(${2:a}: ${3:i32}): ${4:i32} {",
+      "  $0",
+      "}"
+    ],
+    "description": "Exported function for AssemblyScript"
+  },
+  "AssemblyScript Class": {
+    "prefix": "asclass",
+    "scope": "typescript",
+    "body": [
+      "export class ${1:Name} {",
+      "  constructor() {",
+      "    $0",
+      "  }",
+      "}"
+    ],
+    "description": "Exported class with constructor for AssemblyScript"
+  },
+  "AssemblyScript Import": {
+    "prefix": "asimport",
+    "scope": "typescript",
+    "body": [
+      "import { ${2:func} } from \"${1:./module.as}\";$0"
+    ],
+    "description": "Import pattern from an .as file"
+  }
+}
