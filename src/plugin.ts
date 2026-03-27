@@ -329,6 +329,10 @@ export function assemblyScriptPlugin(options: PluginOptions = {}): BunPlugin {
         }
 
         if (!result.success || !result.wasmBytes) {
+          console.error(
+            `[bun-assemblyscript DEBUG] Compilation failed for ${args.path}:`,
+            result.errors,
+          );
           return {
             contents: "",
             errors: result.errors.map((text) => ({ text })),
@@ -359,13 +363,21 @@ export function assemblyScriptPlugin(options: PluginOptions = {}): BunPlugin {
 
         if (resolvedMode === "inline") {
           const b64 = Buffer.from(result.wasmBytes).toString("base64");
+          const moduleContent = generateModule({
+            exportNames,
+            parsedExports,
+            wasmSource: b64,
+            isInline: true,
+          });
+
+          console.log(
+            `[bun-assemblyscript DEBUG] Generated module (inline) for ${args.path}:`,
+            `${moduleContent.split("\n").length} lines`,
+            `exports: ${exportNames.join(", ")}`,
+          );
+
           return {
-            contents: generateModule({
-              exportNames,
-              parsedExports,
-              wasmSource: b64,
-              isInline: true,
-            }),
+            contents: moduleContent,
             loader: "js",
           };
         }

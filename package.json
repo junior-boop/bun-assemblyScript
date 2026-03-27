@@ -21,6 +21,7 @@
   "scripts": {
     "build": "bun run build.ts",
     "test": "bun test",
+    "start": "bun index-wrapper.ts",
     "postinstall": "bun run ./src/install/index.ts"
   },
   "devDependencies": {

@@ -1,9 +1,14 @@
 # bunfig.toml — Configuration Bun pour bun-assemblyscript
 
+preload = ["./preload.js"]
+
 [test]
 # Précharger le plugin avant les tests pour que les imports .as fonctionnent
-preload = ["./preload.ts"]
+preload = ["./preload.js"]
 
 [run]
 # Précharger le plugin pour bun run <script>
-preload = ["./preload.ts"]
+preload = ["./preload.js"]
+
+[dev]
+preload = ["./preload.js"]
